@@ -44,7 +44,7 @@ export function run(input) {
   let line = 1;
   const errors = [];
   const rows = [];
-  let columns = null;
+  let columns = header ? [] : null;
   let width = 0;
   let first = true;
 
@@ -165,11 +165,12 @@ export function run(input) {
           }
           // Junk after the closing quote, up to the next comma or line break,
           // appended as it stands. A lone CR inside the junk is dropped and
-          // reported, and the junk runs on past it.
+          // reported, and the junk runs on past it. A CR right after the quote
+          // starts the junk scan too: only a CR followed by LF ends the record.
           let end = close + 1;
           if (end < n) {
             const c = text.charCodeAt(end);
-            if (c !== COMMA && c !== LF && c !== CR) {
+            if (c !== COMMA && c !== LF) {
               let acc = '';
               let pos = end;
               for (;;) {
@@ -261,6 +262,20 @@ export function run(input) {
     const rowIdx = first ? (header ? null : 0) : rows.length;
     const nl = text.indexOf('\n', i);
     const segEnd = nl === -1 ? n : nl;
+    if (text.charCodeAt(i) === CR) {
+      // A line holding only CRs is an empty line (no record); each CR not
+      // followed by LF is a stray CR. (A lone CR is not a line break for the
+      // line count, so line advances by one here whatever the CRs.)
+      let k = i;
+      while (k < segEnd && text.charCodeAt(k) === CR) k++;
+      if (k === segEnd) {
+        const lone = (segEnd - i) - (nl === -1 ? 0 : 1);
+        for (let t = 0; t < lone; t++) errors.push({ code: 'stray_cr', line: recLine, row: rowIdx });
+        line++;
+        i = nl === -1 ? n : nl + 1;
+        continue;
+      }
+    }
     const q = text.indexOf('"', i);
     if (q !== -1 && q < segEnd) {
       // This line holds a quote: parse the whole record the slow way (it may
@@ -285,9 +300,12 @@ export function run(input) {
       continue;
     }
     // Fast path: no quote and no stray CR on this line. A trailing CR is the
-    // CRLF line break.
+    // CRLF line break when a LF follows; at end of input it is a lone CR.
     let seg = text.slice(i, segEnd);
-    if (seg.length > 0 && seg.charCodeAt(seg.length - 1) === CR) seg = seg.slice(0, -1);
+    if (seg.length > 0 && seg.charCodeAt(seg.length - 1) === CR) {
+      if (nl === -1) errors.push({ code: 'stray_cr', line: recLine, row: rowIdx });
+      seg = seg.slice(0, -1);
+    }
     if (seg.length === 0) {
       // An empty line is no record.
       line++;
